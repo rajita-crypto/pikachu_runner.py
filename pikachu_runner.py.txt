@@ -1,0 +1,564 @@
+import pygame
+import random
+import sys
+
+# --------------------------------------------------
+# Pygame setup
+# --------------------------------------------------
+pygame.init()
+pygame.mixer.init()
+
+WIDTH, HEIGHT = 420, 720
+FPS = 60
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("Pikachu Runner")
+clock = pygame.time.Clock()
+
+# Colors
+BG = (17, 15, 30)
+ROAD = (40, 40, 48)
+GROUND = (30, 30, 36)
+EDGE = (20, 20, 22)
+WHITE = (255, 255, 255)
+YELLOW = (255, 215, 0)
+LIGHT_YELLOW = (255, 235, 120)
+BLACK = (0, 0, 0)
+RED = (255, 80, 80)
+ORANGE = (255, 150, 60)
+GREEN = (110, 220, 110)
+BLUE = (95, 170, 255)
+PURPLE = (155, 110, 255)
+PINK = (255, 120, 180)
+
+# Fonts
+font_big = pygame.font.SysFont("arial", 36, bold=True)
+font_mid = pygame.font.SysFont("arial", 24, bold=True)
+font_small = pygame.font.SysFont("arial", 18, bold=True)
+
+# Optional sounds (disabled by default)
+SOUND_ON = False
+try:
+    if SOUND_ON:
+        jump_sound = pygame.mixer.Sound("jump.wav")
+        coin_sound = pygame.mixer.Sound("coin.wav")
+        crash_sound = pygame.mixer.Sound("crash.wav")
+    else:
+        jump_sound = None
+        coin_sound = None
+        crash_sound = None
+except:
+    jump_sound = None
+    coin_sound = None
+    crash_sound = None
+
+# --------------------------------------------------
+# Game constants
+# --------------------------------------------------
+LANES = [110, 210, 310]
+GROUND_Y = 560
+PLAYER_SIZE = 58
+
+# --------------------------------------------------
+# Utility functions
+# --------------------------------------------------
+def draw_text(surface, text, x, y, size, color):
+    if size == "big":
+        font = font_big
+    elif size == "mid":
+        font = font_mid
+    else:
+        font = font_small
+    rend = font.render(text, True, color)
+    surface.blit(rend, (x, y))
+
+# --------------------------------------------------
+# Player class
+# --------------------------------------------------
+class Player:
+    def __init__(self):
+        self.lane = 1
+        self.x = LANES[self.lane]
+        self.target_x = self.x
+        self.y = GROUND_Y - PLAYER_SIZE
+        self.base_y = self.y
+        self.vy = 0
+        self.is_jump = False
+        self.is_slide = False
+        self.slide_timer = 0.0
+        self.invincible = False
+        self.invincible_timer = 0.0
+
+    def shift_left(self):
+        if self.lane > 0:
+            self.lane -= 1
+            self.target_x = LANES[self.lane]
+
+    def shift_right(self):
+        if self.lane < 2:
+            self.lane += 1
+            self.target_x = LANES[self.lane]
+
+    def jump(self):
+        if not self.is_jump:
+            self.is_jump = True
+            self.vy = -19
+            if jump_sound:
+                jump_sound.play()
+
+    def slide(self):
+        if not self.is_jump and not self.is_slide:
+            self.is_slide = True
+            self.slide_timer = 0.6
+
+    def update(self, dt):
+        self.x += (self.target_x - self.x) * 0.25
+
+        if self.is_jump:
+            self.vy += 0.8
+            self.y += self.vy
+            if self.y >= self.base_y:
+                self.y = self.base_y
+                self.vy = 0
+                self.is_jump = False
+
+        if self.is_slide:
+            self.slide_timer -= dt
+            if self.slide_timer <= 0:
+                self.is_slide = False
+
+        if self.invincible:
+            self.invincible_timer -= dt
+            if self.invincible_timer <= 0:
+                self.invincible = False
+
+    def draw(self, screen):
+        px = int(self.x)
+        py = int(self.y)
+
+        if self.invincible and int(pygame.time.get_ticks() / 80) % 2 == 0:
+            return
+
+        # Tail
+        tail = [(px + 28, py + 26), (px + 56, py + 12), (px + 56, py + 40)]
+        pygame.draw.polygon(screen, (90, 170, 90), tail)
+
+        # Ears
+        pygame.draw.polygon(screen, YELLOW, [(px - 12, py), (px - 6, py - 18), (px + 6, py)])
+        pygame.draw.polygon(screen, YELLOW, [(px + 12, py), (px + 20, py - 18), (px + 30, py)])
+
+        # Head
+        pygame.draw.ellipse(screen, YELLOW, (px - 15, py - 4, 58, 52))
+
+        # Face
+        pygame.draw.circle(screen, BLACK, (px - 6, py + 16), 3)
+        pygame.draw.circle(screen, BLACK, (px + 21, py + 16), 3)
+        pygame.draw.arc(screen, BLACK, (px - 8, py + 18, 32, 16), 3.2, 6.2, 2)
+
+        # Body
+        body_rect = pygame.Rect(px - 18, py + 30, 60, 32)
+        pygame.draw.rect(screen, YELLOW, body_rect)
+
+        # Belly
+        pygame.draw.ellipse(screen, LIGHT_YELLOW, (px - 3, py + 38, 24, 18))
+
+        # Feet
+        pygame.draw.rect(screen, BLACK, (px - 8, py + 61, 16, 10))
+        pygame.draw.rect(screen, BLACK, (px + 18, py + 61, 16, 10))
+
+        # Cheeks
+        pygame.draw.circle(screen, PINK, (px - 18, py + 25), 4)
+        pygame.draw.circle(screen, PINK, (px + 28, py + 25), 4)
+
+        # Sliding body
+        if self.is_slide:
+            pygame.draw.rect(screen, YELLOW, (px - 18, py + 42, 62, 16))
+
+# --------------------------------------------------
+# Obstacle class
+# --------------------------------------------------
+class Obstacle:
+    def __init__(self, kind, lane, y):
+        self.kind = kind
+        self.lane = lane
+        self.x = LANES[lane]
+        self.y = y
+        self.width = 70
+        self.height = 70
+
+    def update(self, dt, speed):
+        self.y += speed * dt
+
+    def draw(self, screen):
+        x = self.x
+        y = int(self.y)
+
+        if self.kind == "train":
+            pygame.draw.rect(screen, (60, 75, 140), (x - 22, y, 82, 110), border_radius=8)
+            pygame.draw.rect(screen, (110, 130, 220), (x - 14, y + 18, 66, 80), border_radius=8)
+            pygame.draw.rect(screen, (20, 20, 35), (x - 12, y + 28, 58, 10))
+            pygame.draw.rect(screen, (20, 20, 35), (x - 12, y + 55, 58, 10))
+
+        elif self.kind == "barrier":
+            pygame.draw.rect(screen, RED, (x - 20, y, 82, 48), border_radius=8)
+            pygame.draw.rect(screen, (200, 60, 60), (x - 12, y + 8, 66, 14), border_radius=4)
+            pygame.draw.line(screen, WHITE, (x - 8, y + 18), (x + 28, y + 18), 3)
+            pygame.draw.line(screen, WHITE, (x - 16, y + 32), (x + 40, y + 32), 3)
+
+        elif self.kind == "cone":
+            pygame.draw.polygon(screen, ORANGE, [(x, y), (x + 24, y), (x + 12, y - 35)])
+            pygame.draw.rect(screen, ORANGE, (x + 11, y, 4, 20))
+
+        elif self.kind == "low_barrier":
+            pygame.draw.rect(screen, PURPLE, (x - 18, y, 80, 28), border_radius=8)
+            pygame.draw.line(screen, WHITE, (x - 12, y + 14), (x + 28, y + 14), 3)
+
+# --------------------------------------------------
+# Coin class
+# --------------------------------------------------
+class Coin:
+    def __init__(self, lane, y):
+        self.lane = lane
+        self.x = LANES[lane]
+        self.y = y
+        self.r = 12
+
+    def update(self, dt, speed):
+        self.y += speed * dt
+
+    def draw(self, screen):
+        x = self.x
+        y = int(self.y)
+        pygame.draw.circle(screen, YELLOW, (x, y), self.r)
+        pygame.draw.circle(screen, LIGHT_YELLOW, (x, y), self.r - 4)
+        pygame.draw.line(screen, (180, 150, 0), (x, y - 7), (x, y + 7), 3)
+        pygame.draw.line(screen, (180, 150, 0), (x - 7, y), (x + 7, y), 3)
+
+# --------------------------------------------------
+# Powerup class
+# --------------------------------------------------
+class PowerUp:
+    def __init__(self, lane, y, kind):
+        self.lane = lane
+        self.x = LANES[lane]
+        self.y = y
+        self.kind = kind
+        self.r = 14
+
+    def update(self, dt, speed):
+        self.y += speed * dt
+
+    def draw(self, screen):
+        x = self.x
+        y = int(self.y)
+
+        if self.kind == "boost":
+            pygame.draw.circle(screen, BLUE, (x, y), self.r)
+            pygame.draw.circle(screen, WHITE, (x, y), self.r - 5)
+            pygame.draw.polygon(screen, BLUE, [(x, y - 10), (x + 6, y), (x - 6, y), (x, y + 10)])
+        elif self.kind == "shield":
+            pygame.draw.circle(screen, GREEN, (x, y), self.r)
+            pygame.draw.circle(screen, WHITE, (x, y), self.r - 5)
+            pygame.draw.arc(screen, GREEN, (x - 8, y - 8, 16, 16), 0, 6.28, 3)
+
+# --------------------------------------------------
+# Game state
+# --------------------------------------------------
+player = Player()
+obstacles = []
+coins = []
+powerups = []
+
+score = 0
+best_score = 0
+speed = 280
+state = "start"
+spawn_obstacle_timer = 0
+spawn_coin_timer = 0
+spawn_power_timer = 0
+boost_timer = 0
+shield_timer = 0
+
+# --------------------------------------------------
+# Spawn functions
+# --------------------------------------------------
+def spawn_obstacle():
+    lane = random.randint(0, 2)
+    kind = random.choice(["train", "barrier", "cone", "low_barrier"])
+    obstacles.append(Obstacle(kind, lane, -80))
+
+def spawn_coin_row():
+    lane = random.randint(0, 2)
+    for offset in range(3):
+        coins.append(Coin(lane, -80 - offset * 48))
+
+def spawn_powerup():
+    lane = random.randint(0, 2)
+    kind = random.choice(["boost", "shield"])
+    powerups.append(PowerUp(lane, -70, kind))
+
+# --------------------------------------------------
+# Reset game
+# --------------------------------------------------
+def reset_game():
+    global player, obstacles, coins, powerups, score, speed, state
+    global spawn_obstacle_timer, spawn_coin_timer, spawn_power_timer, boost_timer, shield_timer
+    player = Player()
+    obstacles = []
+    coins = []
+    powerups = []
+    score = 0
+    speed = 280
+    state = "running"
+    spawn_obstacle_timer = 0
+    spawn_coin_timer = 0
+    spawn_power_timer = 0
+    boost_timer = 0
+    shield_timer = 0
+
+# --------------------------------------------------
+# Collision handling
+# --------------------------------------------------
+def handle_collisions():
+    global score, state, boost_timer, shield_timer, speed
+
+    # obstacle collision
+    for obs in obstacles[:]:
+        if obs.lane != player.lane:
+            continue
+
+        p_left = player.x - 18
+        p_right = player.x + 18
+        p_top = player.y
+        p_bottom = player.y + 68
+
+        o_left = obs.x - 20
+        o_right = obs.x + 24
+        o_top = obs.y
+        o_bottom = obs.y + 90
+
+        if not (p_right < o_left or p_left > o_right):
+            if not (p_bottom < o_top or p_top > o_bottom):
+                if obs.kind in ("train", "barrier", "cone"):
+                    if player.is_jump:
+                        continue
+                    if shield_timer > 0:
+                        obstacles.remove(obs)
+                        shield_timer = max(0, shield_timer - 2)
+                        continue
+                    else:
+                        state = "game_over"
+                        if crash_sound:
+                            crash_sound.play()
+                        return
+
+                if obs.kind == "low_barrier":
+                    if player.is_slide:
+                        continue
+                    if shield_timer > 0:
+                        obstacles.remove(obs)
+                        shield_timer = max(0, shield_timer - 2)
+                        continue
+                    else:
+                        state = "game_over"
+                        if crash_sound:
+                            crash_sound.play()
+                        return
+
+    # coin collision
+    for coin in coins[:]:
+        if coin.lane == player.lane:
+            dx = abs(player.x - coin.x)
+            dy = abs((player.y + 32) - coin.y)
+            if dx < 25 and dy < 30:
+                coins.remove(coin)
+                score += 10
+                if coin_sound:
+                    coin_sound.play()
+
+    # powerup collision
+    for power in powerups[:]:
+        if power.lane == player.lane:
+            dx = abs(player.x - power.x)
+            dy = abs((player.y + 32) - power.y)
+            if dx < 22 and dy < 25:
+                if power.kind == "boost":
+                    boost_timer = 5.0
+                    speed += 25
+                elif power.kind == "shield":
+                    shield_timer = 6.0
+                    player.invincible = True
+                    player.invincible_timer = 3.0
+                powerups.remove(power)
+
+# --------------------------------------------------
+# Draw background
+# --------------------------------------------------
+def draw_background():
+    screen.fill(BG)
+
+    # skyline
+    for i in range(0, WIDTH + 30, 30):
+        h = 80 + (i * 3) % 120
+        pygame.draw.rect(screen, (30, 30, 40), (i, 220 - h, 24, h))
+        pygame.draw.rect(screen, (48, 48, 70), (i + 4, 220 - h + 15, 16, h - 20))
+
+    # road
+    pygame.draw.rect(screen, ROAD, (0, 300, WIDTH, HEIGHT - 300))
+    pygame.draw.rect(screen, GROUND, (0, 300, WIDTH, 24))
+
+    for x in [90, 190, 290]:
+        pygame.draw.rect(screen, (255, 240, 150), (x, 300, 10, HEIGHT - 300))
+        pygame.draw.rect(screen, (255, 240, 150), (x + 30, 300, 10, HEIGHT - 300))
+
+    pygame.draw.rect(screen, EDGE, (0, 300, 18, HEIGHT - 300))
+    pygame.draw.rect(screen, EDGE, (WIDTH - 18, 300, 18, HEIGHT - 300))
+
+# --------------------------------------------------
+# Main game loop
+# --------------------------------------------------
+running = True
+while running:
+    dt = clock.tick(FPS) / 1000.0
+
+    for event in pygame.event.get():
+        if event.type == pygame.QUIT:
+            running = False
+
+        if event.type == pygame.KEYDOWN:
+            if state == "start":
+                reset_game()
+
+            elif state == "game_over":
+                if event.key == pygame.K_RETURN:
+                    reset_game()
+                elif event.key == pygame.K_ESCAPE:
+                    running = False
+
+            elif state == "running":
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    player.shift_left()
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    player.shift_right()
+                elif event.key in (pygame.K_UP, pygame.K_w, pygame.K_SPACE):
+                    player.jump()
+                elif event.key in (pygame.K_DOWN, pygame.K_s):
+                    player.slide()
+
+    keys = pygame.key.get_pressed()
+    if state == "running":
+        if keys[pygame.K_LEFT]:
+            player.shift_left()
+        if keys[pygame.K_RIGHT]:
+            player.shift_right()
+        if keys[pygame.K_UP] or keys[pygame.K_SPACE] or keys[pygame.K_w]:
+            player.jump()
+        if keys[pygame.K_DOWN] or keys[pygame.K_s]:
+            player.slide()
+
+    if state == "running":
+        speed += dt * 1.5
+        boost_timer = max(0, boost_timer - dt)
+        shield_timer = max(0, shield_timer - dt)
+
+        player.update(dt)
+
+        # spawn obstacles
+        spawn_obstacle_timer += dt
+        if spawn_obstacle_timer >= 1.2:
+            spawn_obstacle_timer = 0
+            if random.random() < 0.8:
+                spawn_obstacle()
+            else:
+                first_lane = random.randint(0, 2)
+                second_lane = random.randint(0, 2)
+                while second_lane == first_lane:
+                    second_lane = random.randint(0, 2)
+                obstacles.append(Obstacle(random.choice(["barrier", "cone"]), first_lane, -80))
+                obstacles.append(Obstacle(random.choice(["barrier", "low_barrier"]), second_lane, -200))
+
+        # spawn coins
+        spawn_coin_timer += dt
+        if spawn_coin_timer >= 0.9:
+            spawn_coin_timer = 0
+            if random.random() < 0.75:
+                spawn_coin_row()
+
+        # spawn powerup
+        spawn_power_timer += dt
+        if spawn_power_timer >= 5.5:
+            spawn_power_timer = 0
+            if random.random() < 0.7:
+                spawn_powerup()
+
+        # update world objects
+        for obj in obstacles[:]:
+            obj.update(dt, speed)
+            if obj.y > HEIGHT + 120:
+                obstacles.remove(obj)
+
+        for coin in coins[:]:
+            coin.update(dt, speed)
+            if coin.y > HEIGHT + 80:
+                coins.remove(coin)
+
+        for power in powerups[:]:
+            power.update(dt, speed)
+            if power.y > HEIGHT + 80:
+                powerups.remove(power)
+
+        handle_collisions()
+
+        score += dt * 12
+        if boost_timer > 0:
+            score += dt * 18
+
+    draw_background()
+
+    for coin in coins:
+        coin.draw(screen)
+    for power in powerups:
+        power.draw(screen)
+    for obs in obstacles:
+        obs.draw(screen)
+
+    player.draw(screen)
+
+    # HUD
+    pygame.draw.rect(screen, (15, 15, 18), (15, 15, 170, 50), border_radius=10)
+    draw_text(screen, f"Score: {int(score)}", 25, 22, "small", WHITE)
+    draw_text(screen, f"Best: {best_score}", 25, 40, "small", WHITE)
+
+    if boost_timer > 0:
+        pygame.draw.rect(screen, (0, 0, 0, 150), (WIDTH - 180, 18, 150, 20), border_radius=10)
+        pygame.draw.rect(screen, BLUE, (WIDTH - 180, 18, 150 * (boost_timer / 5.0), 20), border_radius=10)
+        draw_text(screen, "BOOST", WIDTH - 130, 18, "small", WHITE)
+
+    if shield_timer > 0:
+        pygame.draw.rect(screen, (0, 0, 0, 150), (WIDTH - 180, 46, 150, 20), border_radius=10)
+        pygame.draw.rect(screen, GREEN, (WIDTH - 180, 46, 150 * (shield_timer / 6.0), 20), border_radius=10)
+        draw_text(screen, "SHIELD", WIDTH - 130, 46, "small", WHITE)
+
+    if state == "start":
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 120))
+        screen.blit(overlay, (0, 0))
+        draw_text(screen, "PIKACHU RUNNER", 52, 230, "big", YELLOW)
+        draw_text(screen, "Press any key to start", 68, 290, "mid", WHITE)
+        draw_text(screen, "Move: A/D or Arrows", 92, 335, "small", WHITE)
+        draw_text(screen, "Jump: W or Space", 104, 365, "small", WHITE)
+        draw_text(screen, "Slide: S or Down", 116, 395, "small", WHITE)
+
+    elif state == "game_over":
+        best_score = max(best_score, int(score))
+        overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 150))
+        screen.blit(overlay, (0, 0))
+        draw_text(screen, "GAME OVER", 115, 250, "mid", RED)
+        draw_text(screen, f"Score: {int(score)}", 155, 300, "small", WHITE)
+        draw_text(screen, "Press Enter to Retry", 90, 345, "small", WHITE)
+        draw_text(screen, "Esc to Quit", 148, 375, "small", WHITE)
+
+    pygame.display.flip()
+
+pygame.quit()
+sys.exit()
